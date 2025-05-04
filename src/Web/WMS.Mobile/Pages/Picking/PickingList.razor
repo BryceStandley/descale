@@ -1,0 +1,299 @@
+@page "/picking"
+@page "/picking/list"
+@using Blazored.LocalStorage
+@using descale.Web.WMS.Mobile.Services
+@inject NavigationManager NavigationManager
+@inject HttpClient HttpClient
+@inject ILocalStorageService LocalStorage
+@inject BarcodeScannerService BarcodeScanner
+
+<div class="picking-list-page">
+    <div class="filter-bar">
+        <div class="filter-item @(currentFilter == "all" ? "active" : "")" @onclick="() => FilterList('all')">All</div>
+        <div class="filter-item @(currentFilter == "assigned" ? "active" : "")" @onclick="() => FilterList('assigned')">Assigned</div>
+        <div class="filter-item @(currentFilter == "available" ? "active" : "")" @onclick="() => FilterList('available')">Available</div>
+    </div>
+    
+    <div class="search-bar">
+        <div class="search-input">
+            <span class="oi oi-magnifying-glass"></span>
+            <input type="text" placeholder="Search picking lists..." @bind="searchTerm" @bind:event="oninput" />
+        </div>
+        <button class="scan-button" @onclick="ScanBarcode">
+            <span class="oi oi-bar-chart"></span>
+        </button>
+    </div>
+    
+    <div class="list-container">
+        @if (isLoading)
+        {
+            <div class="loading-indicator">
+                <div class="spinner"></div>
+                <p>Loading picking lists...</p>
+            </div>
+        }
+        else if (!filteredPickingLists.Any())
+        {
+            <div class="empty-list">
+                <span class="oi oi-info"></span>
+                <p>No picking lists found.</p>
+            </div>
+        }
+        else
+        {
+            <div class="picking-lists">
+                @foreach (var pickingList in filteredPickingLists)
+                {
+                    <div class="picking-list-item" @onclick="() => NavigateToPickingList(pickingList.Id)">
+                        <div class="item-header">
+                            <div class="item-number">@pickingList.Number</div>
+                            <div class="item-status @pickingList.Status.ToLower()">@pickingList.Status</div>
+                        </div>
+                        <div class="item-body">
+                            <div class="item-info">
+                                <div class="info-label">Order:</div>
+                                <div class="info-value">@pickingList.OrderNumber</div>
+                            </div>
+                            <div class="item-info">
+                                <div class="info-label">Items:</div>
+                                <div class="info-value">@pickingList.ItemCount</div>
+                            </div>
+                            <div class="item-info">
+                                <div class="info-label">Priority:</div>
+                                <div class="info-value @pickingList.Priority.ToLower()">@pickingList.Priority</div>
+                            </div>
+                        </div>
+                        <div class="item-footer">
+                            @if (pickingList.Status == "Released")
+                            {
+                                <button class="action-button" @onclick:stopPropagation="true" @onclick="() => AssignPickingList(pickingList.Id)">
+                                    <span class="oi oi-task"></span>
+                                    <span>Assign to me</span>
+                                </button>
+                            }
+                            else if (pickingList.Status == "In Progress" && pickingList.AssignedTo == currentUserId)
+                            {
+                                <button class="action-button primary" @onclick:stopPropagation="true" @onclick="() => ContinuePicking(pickingList.Id)">
+                                    <span class="oi oi-arrow-right"></span>
+                                    <span>Continue</span>
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private bool isLoading = true;
+    private string searchTerm = "";
+    private string currentFilter = "all";
+    private string currentUserId = "user123"; // This would come from authentication
+    private List<PickingListModel> pickingLists = new List<PickingListModel>();
+    private List<PickingListModel> filteredPickingLists => FilterPickingLists();
+    
+    protected override async Task OnInitializedAsync()
+    {
+        BarcodeScanner.BarcodeScanned += OnBarcodeScanned;
+        await LoadPickingLists();
+    }
+    
+    private async Task LoadPickingLists()
+    {
+        isLoading = true;
+        
+        try
+        {
+            // Try to load from API first
+            try
+            {
+                var response = await HttpClient.GetAsync("api/pickinglists");
+                if (response.IsSuccessStatusCode)
+                {
+                    pickingLists = await response.Content.ReadFromJsonAsync<List<PickingListModel>>();
+                    await LocalStorage.SetItemAsync("pickingLists", pickingLists);
+                }
+            }
+            catch
+            {
+                // If API fails, load from local storage
+                var localPickingLists = await LocalStorage.GetItemAsync<List<PickingListModel>>("pickingLists");
+                if (localPickingLists != null)
+                {
+                    pickingLists = localPickingLists;
+                }
+                else
+                {
+                    // Create sample data if nothing exists
+                    pickingLists = GenerateSamplePickingLists();
+                    await LocalStorage.SetItemAsync("pickingLists", pickingLists);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error loading picking lists: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+    
+    private List<PickingListModel> GenerateSamplePickingLists()
+    {
+        return new List<PickingListModel>
+        {
+            new PickingListModel
+            {
+                Id = Guid.NewGuid(),
+                Number = "PL-2023-0001",
+                OrderNumber = "ORD-2023-0001",
+                Status = "Released",
+                Priority = "Normal",
+                ItemCount = 5,
+                AssignedTo = null
+            },
+            new PickingListModel
+            {
+                Id = Guid.NewGuid(),
+                Number = "PL-2023-0002",
+                OrderNumber = "ORD-2023-0002",
+                Status = "In Progress",
+                Priority = "High",
+                ItemCount = 10,
+                AssignedTo = currentUserId
+            },
+            new PickingListModel
+            {
+                Id = Guid.NewGuid(),
+                Number = "PL-2023-0003",
+                OrderNumber = "ORD-2023-0003",
+                Status = "Completed",
+                Priority = "Normal",
+                ItemCount = 3,
+                AssignedTo = currentUserId
+            },
+            new PickingListModel
+            {
+                Id = Guid.NewGuid(),
+                Number = "PL-2023-0004",
+                OrderNumber = "ORD-2023-0004",
+                Status = "Released",
+                Priority = "Urgent",
+                ItemCount = 8,
+                AssignedTo = null
+            }
+        };
+    }
+    
+    private List<PickingListModel> FilterPickingLists()
+    {
+        IEnumerable<PickingListModel> filtered = pickingLists;
+        
+        // Apply status filter
+        switch (currentFilter)
+        {
+            case "assigned":
+                filtered = filtered.Where(p => p.AssignedTo == currentUserId && p.Status != "Completed");
+                break;
+            case "available":
+                filtered = filtered.Where(p => p.Status == "Released");
+                break;
+        }
+        
+        // Apply search term
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            filtered = filtered.Where(p => 
+                p.Number.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
+                p.OrderNumber.Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        return filtered.ToList();
+    }
+    
+    private void FilterList(string filter)
+    {
+        currentFilter = filter;
+    }
+    
+    private async Task ScanBarcode()
+    {
+        await BarcodeScanner.StartScanningAsync();
+    }
+    
+    private void OnBarcodeScanned(string barcode)
+    {
+        // Look for matching picking list
+        var matchedList = pickingLists.FirstOrDefault(p => 
+            p.Number == barcode || p.OrderNumber == barcode);
+            
+        if (matchedList != null)
+        {
+            NavigateToPickingList(matchedList.Id);
+        }
+        else
+        {
+            searchTerm = barcode;
+            StateHasChanged();
+        }
+    }
+    
+    private void NavigateToPickingList(Guid id)
+    {
+        NavigationManager.NavigateTo($"/picking/{id}");
+    }
+    
+    private async Task AssignPickingList(Guid id)
+    {
+        var pickingList = pickingLists.FirstOrDefault(p => p.Id == id);
+        if (pickingList != null)
+        {
+            try
+            {
+                // Try to update via API
+                try
+                {
+                    await HttpClient.PostAsync($"api/pickinglists/{id}/assign", null);
+                }
+                catch
+                {
+                    // If API fails, update locally
+                    pickingList.Status = "In Progress";
+                    pickingList.AssignedTo = currentUserId;
+                    await LocalStorage.SetItemAsync("pickingLists", pickingLists);
+                }
+                
+                NavigateToPickingList(id);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error assigning picking list: {ex.Message}");
+            }
+        }
+    }
+    
+    private void ContinuePicking(Guid id)
+    {
+        NavigationManager.NavigateTo($"/picking/{id}/pick");
+    }
+    
+    public void Dispose()
+    {
+        BarcodeScanner.BarcodeScanned -= OnBarcodeScanned;
+    }
+    
+    private class PickingListModel
+    {
+        public Guid Id { get; set; }
+        public string Number { get; set; }
+        public string OrderNumber { get; set; }
+        public string Status { get; set; }
+        public string Priority { get; set; }
+        public int ItemCount { get; set; }
+        public string AssignedTo { get; set; }
+    }
+}

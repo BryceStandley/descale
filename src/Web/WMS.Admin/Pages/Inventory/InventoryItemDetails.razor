@@ -1,0 +1,203 @@
+@page "/inventory/items/{Id:guid}"
+@using descale.Web.WMS.Admin.Services
+@using MudBlazor
+@inject InventoryService InventoryService
+@inject NavigationManager NavigationManager
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudBreadcrumbs Items='@new List<BreadcrumbItem> { new BreadcrumbItem('Home', '/'), new BreadcrumbItem('Inventory', '/inventory'), new BreadcrumbItem('Items', '/inventory/items'), new BreadcrumbItem('Details', null, true) }'></MudBreadcrumbs>
+
+@if (Item == null)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudGrid Spacing="4">
+        <MudItem xs="12">
+            <MudCard>
+                <MudCardHeader>
+                    <CardHeaderContent>
+                        <MudText Typo="Typo.h5">@Item.Name</MudText>
+                        <MudText Typo="Typo.body2">SKU: @Item.Sku</MudText>
+                    </CardHeaderContent>
+                    <CardHeaderActions>
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" OnClick="@(() => NavigationManager.NavigateTo($"/inventory/items/edit/{Item.Id}"))" />
+                    </CardHeaderActions>
+                </MudCardHeader>
+                <MudCardContent>
+                    <MudGrid>
+                        <MudItem xs="12" md="6">
+                            <MudText Typo="Typo.subtitle1">Details</MudText>
+                            <MudList Dense="true">
+                                <MudListItem>
+                                    <MudText><b>Category:</b> @Item.Category</MudText>
+                                </MudListItem>
+                                <MudListItem>
+                                    <MudText><b>Description:</b> @Item.Description</MudText>
+                                </MudListItem>
+                                <MudListItem>
+                                    <MudText><b>Unit of Measure:</b> @Item.UnitOfMeasure</MudText>
+                                </MudListItem>
+                                <MudListItem>
+                                    <MudText><b>Cost:</b> @Item.Cost.ToString("C")</MudText>
+                                </MudListItem>
+                                <MudListItem>
+                                    <MudText><b>Created:</b> @Item.CreatedAt.ToString("g")</MudText>
+                                </MudListItem>
+                                @if (Item.ModifiedAt.HasValue)
+                                {
+                                    <MudListItem>
+                                        <MudText><b>Last Modified:</b> @Item.ModifiedAt.Value.ToString("g")</MudText>
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudText Typo="Typo.subtitle1">Inventory</MudText>
+                            <MudPaper Class="pa-4 mt-2" Elevation="0" Outlined="true">
+                                <MudGrid>
+                                    <MudItem xs="4">
+                                        <MudText Align="Align.Center" Typo="Typo.body1"><b>On Hand</b></MudText>
+                                        <MudText Align="Align.Center" Typo="Typo.h5">@Item.QuantityOnHand</MudText>
+                                    </MudItem>
+                                    <MudItem xs="4">
+                                        <MudText Align="Align.Center" Typo="Typo.body1"><b>Allocated</b></MudText>
+                                        <MudText Align="Align.Center" Typo="Typo.h5">@Item.QuantityAllocated</MudText>
+                                    </MudItem>
+                                    <MudItem xs="4">
+                                        <MudText Align="Align.Center" Typo="Typo.body1"><b>Available</b></MudText>
+                                        <MudText Align="Align.Center" Typo="Typo.h5">@Item.QuantityAvailable</MudText>
+                                    </MudItem>
+                                </MudGrid>
+                            </MudPaper>
+                            <MudStack Spacing="2" Class="mt-4">
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" FullWidth="true" OnClick="OpenAddStockDialog">Add Stock</MudButton>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Error" FullWidth="true" OnClick="OpenRemoveStockDialog">Remove Stock</MudButton>
+                            </MudStack>
+                        </MudItem>
+                    </MudGrid>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+        
+        <MudItem xs="12">
+            <MudText Typo="Typo.h6" Class="mb-2">Stock Locations</MudText>
+            <MudTable Items="@LocationStock" Loading="@IsLoadingLocations" Hover="true" Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh>Location</MudTh>
+                    <MudTh>Quantity</MudTh>
+                    <MudTh>Last Updated</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Location">@context.LocationCode</MudTd>
+                    <MudTd DataLabel="Quantity">@context.Quantity</MudTd>
+                    <MudTd DataLabel="Last Updated">@context.LastUpdated.ToString("g")</MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudIconButton Icon="@Icons.Material.Filled.Visibility" Size="Size.Small" OnClick="@(() => NavigationManager.NavigateTo($"/inventory/locations/{context.LocationId}"))" />
+                    </MudTd>
+                </RowTemplate>
+                <PagerContent>
+                    <MudTablePager />
+                </PagerContent>
+                <NoRecordsContent>
+                    <MudText>No stock locations found for this item.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+    
+    private InventoryItemDto Item;
+    private IEnumerable<StockOnHandDto> LocationStock = new List<StockOnHandDto>();
+    private bool IsLoadingLocations = true;
+    
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+    }
+    
+    private async Task LoadData()
+    {
+        try
+        {
+            Item = await InventoryService.GetInventoryItemByIdAsync(Id);
+            
+            if (Item == null)
+            {
+                Snackbar.Add("Inventory item not found", Severity.Error);
+                NavigationManager.NavigateTo("/inventory/items");
+                return;
+            }
+            
+            await LoadLocationStock();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading inventory item: {ex.Message}", Severity.Error);
+        }
+    }
+    
+    private async Task LoadLocationStock()
+    {
+        IsLoadingLocations = true;
+        
+        try
+        {
+            // Note: This endpoint doesn't exist yet - we'd need to add it to the API
+            // For now, use an empty list
+            LocationStock = new List<StockOnHandDto>();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading location stock: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            IsLoadingLocations = false;
+        }
+    }
+    
+    private async Task OpenAddStockDialog()
+    {
+        var parameters = new DialogParameters
+        {
+            { "ItemId", Item.Id },
+            { "ItemName", Item.Name },
+            { "ItemSku", Item.Sku }
+        };
+        
+        var dialog = DialogService.Show<AddStockDialog>("Add Stock", parameters);
+        var result = await dialog.Result;
+        
+        if (!result.Cancelled)
+        {
+            await LoadData();
+        }
+    }
+    
+    private async Task OpenRemoveStockDialog()
+    {
+        var parameters = new DialogParameters
+        {
+            { "ItemId", Item.Id },
+            { "ItemName", Item.Name },
+            { "ItemSku", Item.Sku },
+            { "MaxQuantity", Item.QuantityAvailable }
+        };
+        
+        var dialog = DialogService.Show<RemoveStockDialog>("Remove Stock", parameters);
+        var result = await dialog.Result;
+        
+        if (!result.Cancelled)
+        {
+            await LoadData();
+        }
+    }
+}

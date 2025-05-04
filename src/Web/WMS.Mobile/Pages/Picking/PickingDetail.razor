@@ -1,0 +1,343 @@
+@page "/picking/{Id:guid}"
+@using Blazored.LocalStorage
+@using descale.Web.WMS.Mobile.Services
+@inject NavigationManager NavigationManager
+@inject HttpClient HttpClient
+@inject ILocalStorageService LocalStorage
+@inject BarcodeScannerService BarcodeScanner
+
+<div class="picking-detail-page">
+    @if (isLoading)
+    {
+        <div class="loading-indicator">
+            <div class="spinner"></div>
+            <p>Loading picking list details...</p>
+        </div>
+    }
+    else if (pickingList == null)
+    {
+        <div class="error-message">
+            <span class="oi oi-warning"></span>
+            <p>Picking list not found.</p>
+            <button class="action-button" @onclick="GoBack">Go Back</button>
+        </div>
+    }
+    else
+    {
+        <div class="detail-header">
+            <div class="header-title">
+                <h3>@pickingList.Number</h3>
+                <div class="status-badge @pickingList.Status.ToLower()">@pickingList.Status</div>
+            </div>
+            <div class="header-details">
+                <div class="detail-row">
+                    <div class="detail-label">Order:</div>
+                    <div class="detail-value">@pickingList.OrderNumber</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Priority:</div>
+                    <div class="detail-value @pickingList.Priority.ToLower()">@pickingList.Priority</div>
+                </div>
+                <div class="detail-row">
+                    <div class="detail-label">Created:</div>
+                    <div class="detail-value">@pickingList.CreatedAt.ToString("g")</div>
+                </div>
+                @if (!string.IsNullOrEmpty(pickingList.AssignedTo))
+                {
+                    <div class="detail-row">
+                        <div class="detail-label">Assigned To:</div>
+                        <div class="detail-value">@GetUserName(pickingList.AssignedTo)</div>
+                    </div>
+                }
+            </div>
+        </div>
+        
+        <div class="detail-content">
+            <h4>Items to Pick</h4>
+            <div class="items-list">
+                @foreach (var item in pickingList.Items)
+                {
+                    <div class="item-card @item.Status.ToLower()">
+                        <div class="item-header">
+                            <div class="item-sku">@item.Sku</div>
+                            <div class="item-status">@item.Status</div>
+                        </div>
+                        <div class="item-name">@item.ItemName</div>
+                        <div class="item-quantities">
+                            <div class="quantity-box">
+                                <div class="quantity-label">Required</div>
+                                <div class="quantity-value">@item.QuantityRequired</div>
+                            </div>
+                            <div class="quantity-box">
+                                <div class="quantity-label">Picked</div>
+                                <div class="quantity-value">@item.QuantityPicked</div>
+                            </div>
+                            <div class="quantity-box">
+                                <div class="quantity-label">Remaining</div>
+                                <div class="quantity-value">@(item.QuantityRequired - item.QuantityPicked)</div>
+                            </div>
+                        </div>
+                        <div class="item-locations">
+                            <div class="locations-label">Pick Locations:</div>
+                            @foreach (var location in item.PickingLocations)
+                            {
+                                <div class="location-item @location.Status.ToLower()">
+                                    <div class="location-code">@location.LocationCode</div>
+                                    <div class="location-quantity">@location.QuantityPicked / @location.QuantityToPick</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+        
+        <div class="detail-footer">
+            @if (pickingList.Status == "Released")
+            {
+                <button class="action-button primary" @onclick="AssignToMe">
+                    <span class="oi oi-task"></span>
+                    <span>Assign to me</span>
+                </button>
+            }
+            else if (pickingList.Status == "In Progress" && pickingList.AssignedTo == currentUserId)
+            {
+                <button class="action-button primary" @onclick="StartPicking">
+                    <span class="oi oi-arrow-right"></span>
+                    <span>Start Picking</span>
+                </button>
+            }
+            else if (pickingList.Status == "Completed")
+            {
+                <div class="completion-info">
+                    <span class="oi oi-check"></span>
+                    <span>Completed on @pickingList.CompletedAt?.ToString("g")</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+    
+    private bool isLoading = true;
+    private string currentUserId = "user123"; // This would come from authentication
+    private PickingListDetailModel pickingList;
+    
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPickingListDetail();
+    }
+    
+    private async Task LoadPickingListDetail()
+    {
+        isLoading = true;
+        
+        try
+        {
+            // Try to load from API first
+            try
+            {
+                var response = await HttpClient.GetAsync($"api/pickinglists/{Id}");
+                if (response.IsSuccessStatusCode)
+                {
+                    pickingList = await response.Content.ReadFromJsonAsync<PickingListDetailModel>();
+                    await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+                }
+            }
+            catch
+            {
+                // If API fails, load from local storage
+                pickingList = await LocalStorage.GetItemAsync<PickingListDetailModel>($"pickingList_{Id}");
+                
+                if (pickingList == null)
+                {
+                    // Try to find in the list of picking lists
+                    var lists = await LocalStorage.GetItemAsync<List<PickingListModel>>("pickingLists");
+                    var listSummary = lists?.FirstOrDefault(l => l.Id == Id);
+                    
+                    if (listSummary != null)
+                    {
+                        // Create a detailed model from the summary
+                        pickingList = CreateSampleDetailFromSummary(listSummary);
+                        await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error loading picking list detail: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+    
+    private PickingListDetailModel CreateSampleDetailFromSummary(PickingListModel summary)
+    {
+        var detail = new PickingListDetailModel
+        {
+            Id = summary.Id,
+            Number = summary.Number,
+            OrderNumber = summary.OrderNumber,
+            Status = summary.Status,
+            Priority = summary.Priority,
+            AssignedTo = summary.AssignedTo,
+            CreatedAt = DateTime.Now.AddDays(-1),
+            CompletedAt = summary.Status == "Completed" ? DateTime.Now.AddHours(-2) : null,
+            Items = new List<PickingItemModel>()
+        };
+        
+        // Generate sample items
+        var random = new Random();
+        var itemCount = summary.ItemCount;
+        
+        for (int i = 0; i < itemCount; i++)
+        {
+            var status = "Pending";
+            if (summary.Status == "In Progress")
+            {
+                status = i < itemCount / 2 ? "Picked" : "Picking";
+            }
+            else if (summary.Status == "Completed")
+            {
+                status = "Picked";
+            }
+            
+            var quantityRequired = random.Next(1, 10);
+            var quantityPicked = status == "Picked" ? quantityRequired : (status == "Picking" ? random.Next(1, quantityRequired) : 0);
+            
+            var item = new PickingItemModel
+            {
+                Id = Guid.NewGuid(),
+                Sku = $"SKU-{100 + i}",
+                ItemName = $"Test Product {i + 1}",
+                QuantityRequired = quantityRequired,
+                QuantityPicked = quantityPicked,
+                Status = status,
+                PickingLocations = new List<PickingLocationModel>()
+            };
+            
+            // Generate 1-3 picking locations per item
+            var locationCount = random.Next(1, 4);
+            for (int j = 0; j < locationCount; j++)
+            {
+                var locStatus = "Pending";
+                var locQuantityToPick = (quantityRequired / locationCount) + (j < quantityRequired % locationCount ? 1 : 0);
+                var locQuantityPicked = 0;
+                
+                if (status == "Picking" || status == "Picked")
+                {
+                    if (j == 0)
+                    {
+                        locStatus = status == "Picked" ? "Picked" : "Partial";
+                        locQuantityPicked = status == "Picked" ? locQuantityToPick : random.Next(1, locQuantityToPick);
+                    }
+                }
+                
+                item.PickingLocations.Add(new PickingLocationModel
+                {
+                    Id = Guid.NewGuid(),
+                    LocationCode = $"A-{j + 1}-{(char)('A' + random.Next(0, 3))}-{random.Next(1, 5)}",
+                    Zone = $"Zone {(char)('A' + random.Next(0, 3))}",
+                    QuantityToPick = locQuantityToPick,
+                    QuantityPicked = locQuantityPicked,
+                    Status = locStatus
+                });
+            }
+            
+            detail.Items.Add(item);
+        }
+        
+        return detail;
+    }
+    
+    private string GetUserName(string userId)
+    {
+        // In a real app, we would look up the user name
+        return userId == currentUserId ? "Me" : "Another User";
+    }
+    
+    private void GoBack()
+    {
+        NavigationManager.NavigateTo("/picking");
+    }
+    
+    private async Task AssignToMe()
+    {
+        try
+        {
+            // Try to update via API
+            try
+            {
+                await HttpClient.PostAsync($"api/pickinglists/{Id}/assign", null);
+            }
+            catch
+            {
+                // If API fails, update locally
+                pickingList.Status = "In Progress";
+                pickingList.AssignedTo = currentUserId;
+                await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+                
+                // Also update in the list
+                var lists = await LocalStorage.GetItemAsync<List<PickingListModel>>("pickingLists");
+                var listSummary = lists?.FirstOrDefault(l => l.Id == Id);
+                if (listSummary != null)
+                {
+                    listSummary.Status = "In Progress";
+                    listSummary.AssignedTo = currentUserId;
+                    await LocalStorage.SetItemAsync("pickingLists", lists);
+                }
+            }
+            
+            await LoadPickingListDetail();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error assigning picking list: {ex.Message}");
+        }
+    }
+    
+    private void StartPicking()
+    {
+        NavigationManager.NavigateTo($"/picking/{Id}/pick");
+    }
+    
+    private class PickingListDetailModel
+    {
+        public Guid Id { get; set; }
+        public string Number { get; set; }
+        public string OrderNumber { get; set; }
+        public string Status { get; set; }
+        public string Priority { get; set; }
+        public string AssignedTo { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public List<PickingItemModel> Items { get; set; }
+    }
+    
+    private class PickingItemModel
+    {
+        public Guid Id { get; set; }
+        public string Sku { get; set; }
+        public string ItemName { get; set; }
+        public int QuantityRequired { get; set; }
+        public int QuantityPicked { get; set; }
+        public string Status { get; set; }
+        public List<PickingLocationModel> PickingLocations { get; set; }
+    }
+    
+    private class PickingLocationModel
+    {
+        public Guid Id { get; set; }
+        public string LocationCode { get; set; }
+        public string Zone { get; set; }
+        public int QuantityToPick { get; set; }
+        public int QuantityPicked { get; set; }
+        public string Status { get; set; }
+    }
+}

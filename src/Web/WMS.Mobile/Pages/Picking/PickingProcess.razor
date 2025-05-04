@@ -1,0 +1,553 @@
+@page "/picking/{Id:guid}/pick"
+@using Blazored.LocalStorage
+@using descale.Web.WMS.Mobile.Services
+@using Microsoft.JSInterop
+@inject NavigationManager NavigationManager
+@inject HttpClient HttpClient
+@inject ILocalStorageService LocalStorage
+@inject BarcodeScannerService BarcodeScanner
+@inject IJSRuntime JSRuntime
+
+<div class="picking-process-page">
+    @if (isLoading)
+    {
+        <div class="loading-indicator">
+            <div class="spinner"></div>
+            <p>Loading picking process...</p>
+        </div>
+    }
+    else if (pickingList == null)
+    {
+        <div class="error-message">
+            <span class="oi oi-warning"></span>
+            <p>Picking list not found.</p>
+            <button class="action-button" @onclick="GoBack">Go Back</button>
+        </div>
+    }
+    else
+    {
+        <div class="process-header">
+            <div class="header-title">
+                <h3>@pickingList.Number</h3>
+                <div class="progress-info">
+                    <div class="progress-text">@currentItemIndex of @totalItems</div>
+                    <div class="progress-bar">
+                        <div class="progress-value" style="width: @($"{progressPercentage}%")"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        @if (currentItem != null)
+        {
+            <div class="item-card">
+                <div class="item-header">
+                    <div class="item-sku">@currentItem.Sku</div>
+                    <div class="item-status @currentItem.Status.ToLower()">@currentItem.Status</div>
+                </div>
+                <div class="item-name">@currentItem.ItemName</div>
+                <div class="item-quantities">
+                    <div class="quantity-box">
+                        <div class="quantity-label">Required</div>
+                        <div class="quantity-value">@currentItem.QuantityRequired</div>
+                    </div>
+                    <div class="quantity-box">
+                        <div class="quantity-label">Picked</div>
+                        <div class="quantity-value">@currentItem.QuantityPicked</div>
+                    </div>
+                    <div class="quantity-box">
+                        <div class="quantity-label">Remaining</div>
+                        <div class="quantity-value">@(currentItem.QuantityRequired - currentItem.QuantityPicked)</div>
+                    </div>
+                </div>
+            </div>
+            
+            @if (currentLocation != null)
+            {
+                <div class="location-card">
+                    <div class="location-header">
+                        <div class="location-title">Pick Location</div>
+                        <div class="location-status @currentLocation.Status.ToLower()">@currentLocation.Status</div>
+                    </div>
+                    <div class="location-code">@currentLocation.LocationCode</div>
+                    <div class="location-zone">Zone: @currentLocation.Zone</div>
+                    <div class="location-quantities">
+                        <div class="quantity-label">Quantity to Pick:</div>
+                        <div class="quantity-value">@currentLocation.QuantityToPick</div>
+                    </div>
+                    
+                    @if (showVerification)
+                    {
+                        <div class="verification-section">
+                            <div class="verification-prompt">
+                                <div>Scan or enter the location barcode to verify:</div>
+                                <div class="verification-input">
+                                    <input type="text" @bind="verificationCode" placeholder="Location code..." />
+                                    <button class="scan-button" @onclick="ScanLocationBarcode">
+                                        <span class="oi oi-bar-chart"></span>
+                                    </button>
+                                </div>
+                                @if (!string.IsNullOrEmpty(verificationError))
+                                {
+                                    <div class="verification-error">@verificationError</div>
+                                }
+                            </div>
+                            <div class="verification-actions">
+                                <button class="action-button" @onclick="VerifyLocation">Verify</button>
+                                <button class="action-button secondary" @onclick="SkipVerification">Skip</button>
+                            </div>
+                        </div>
+                    }
+                    else if (showQuantityInput)
+                    {
+                        <div class="quantity-section">
+                            <div class="quantity-prompt">
+                                <div>Enter quantity picked:</div>
+                                <div class="quantity-input">
+                                    <input type="number" min="0" max="@currentLocation.QuantityToPick" @bind="quantityPicked" />
+                                </div>
+                                @if (!string.IsNullOrEmpty(quantityError))
+                                {
+                                    <div class="quantity-error">@quantityError</div>
+                                }
+                            </div>
+                            <div class="quantity-actions">
+                                <button class="action-button primary" @onclick="ConfirmQuantity">Confirm</button>
+                                <button class="action-button" @onclick="() => ShowShortItemDialog()">Mark as Short</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="item-complete">
+                    <div class="complete-icon">
+                        <span class="oi oi-check"></span>
+                    </div>
+                    <div class="complete-message">Item picking complete</div>
+                    <button class="action-button primary" @onclick="NextItem">Next Item</button>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="picking-complete">
+                <div class="complete-icon">
+                    <span class="oi oi-check"></span>
+                </div>
+                <div class="complete-message">All items have been picked</div>
+                <div class="complete-summary">
+                    <div class="summary-row">
+                        <div class="summary-label">Total Items:</div>
+                        <div class="summary-value">@totalItems</div>
+                    </div>
+                    <div class="summary-row">
+                        <div class="summary-label">Fully Picked Items:</div>
+                        <div class="summary-value">@pickedItemsCount</div>
+                    </div>
+                    @if (shortItemsCount > 0)
+                    {
+                        <div class="summary-row">
+                            <div class="summary-label">Short Items:</div>
+                            <div class="summary-value">@shortItemsCount</div>
+                        </div>
+                    }
+                </div>
+                <div class="complete-actions">
+                    <button class="action-button primary" @onclick="CompletePickingList">Complete Picking</button>
+                    <button class="action-button" @onclick="GoToPickingList">Return to Details</button>
+                </div>
+            </div>
+        }
+    }
+    
+    @if (showShortDialog)
+    {
+        <div class="modal-overlay">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h4>Mark Item as Short</h4>
+                    <button class="close-button" @onclick="CloseShortItemDialog">×</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Reason for Shortage:</label>
+                        <select @bind="shortReason" class="form-select">
+                            <option value="">Select a reason...</option>
+                            <option value="Not in location">Not in location</option>
+                            <option value="Damaged items">Damaged items</option>
+                            <option value="Insufficient quantity">Insufficient quantity</option>
+                            <option value="Location inaccessible">Location inaccessible</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    @if (shortReason == "Other")
+                    {
+                        <div class="form-group">
+                            <label>Specify reason:</label>
+                            <textarea @bind="shortReasonOther" class="form-textarea" rows="3"></textarea>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(shortReasonError))
+                    {
+                        <div class="form-error">@shortReasonError</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="action-button" @onclick="CloseShortItemDialog">Cancel</button>
+                    <button class="action-button danger" @onclick="ConfirmShortItem">Mark as Short</button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public Guid Id { get; set; }
+    
+    private bool isLoading = true;
+    private string currentUserId = "user123"; // This would come from authentication
+    
+    private PickingListDetailModel pickingList;
+    private PickingItemModel currentItem;
+    private PickingLocationModel currentLocation;
+    
+    private int currentItemIndex = 0;
+    private int totalItems = 0;
+    private int pickedItemsCount = 0;
+    private int shortItemsCount = 0;
+    private int progressPercentage = 0;
+    
+    private bool showVerification = true;
+    private bool showQuantityInput = false;
+    private string verificationCode = "";
+    private string verificationError = "";
+    private int quantityPicked = 0;
+    private string quantityError = "";
+    
+    private bool showShortDialog = false;
+    private string shortReason = "";
+    private string shortReasonOther = "";
+    private string shortReasonError = "";
+    
+    protected override async Task OnInitializedAsync()
+    {
+        BarcodeScanner.BarcodeScanned += OnBarcodeScanned;
+        await LoadPickingProcess();
+    }
+    
+    private async Task LoadPickingProcess()
+    {
+        isLoading = true;
+        
+        try
+        {
+            // Try to load from API first
+            try
+            {
+                var response = await HttpClient.GetAsync($"api/pickinglists/{Id}");
+                if (response.IsSuccessStatusCode)
+                {
+                    pickingList = await response.Content.ReadFromJsonAsync<PickingListDetailModel>();
+                    await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+                }
+            }
+            catch
+            {
+                // If API fails, load from local storage
+                pickingList = await LocalStorage.GetItemAsync<PickingListDetailModel>($"pickingList_{Id}");
+            }
+            
+            if (pickingList != null)
+            {
+                totalItems = pickingList.Items.Count;
+                pickedItemsCount = pickingList.Items.Count(i => i.Status == "Picked");
+                shortItemsCount = pickingList.Items.Count(i => i.Status == "Short");
+                
+                // Start with the first item that is not picked or short
+                var nextItem = pickingList.Items.FirstOrDefault(i => i.Status != "Picked" && i.Status != "Short");
+                if (nextItem != null)
+                {
+                    currentItemIndex = pickingList.Items.IndexOf(nextItem) + 1;
+                    SetCurrentItem(nextItem);
+                }
+                else
+                {
+                    // All items have been picked or marked as short
+                    currentItem = null;
+                    currentLocation = null;
+                    currentItemIndex = totalItems;
+                }
+                
+                UpdateProgress();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error loading picking process: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+    
+    private void SetCurrentItem(PickingItemModel item)
+    {
+        currentItem = item;
+        
+        if (currentItem != null)
+        {
+            // Find the first location that is not fully picked
+            currentLocation = currentItem.PickingLocations.FirstOrDefault(l => l.Status != "Picked");
+            
+            if (currentLocation != null)
+            {
+                // Start the verification process
+                showVerification = true;
+                showQuantityInput = false;
+                verificationCode = "";
+                verificationError = "";
+            }
+        }
+        else
+        {
+            currentLocation = null;
+        }
+    }
+    
+    private void UpdateProgress()
+    {
+        if (totalItems > 0)
+        {
+            progressPercentage = (int)((float)(pickedItemsCount + shortItemsCount) / totalItems * 100);
+        }
+    }
+    
+    private async Task ScanLocationBarcode()
+    {
+        await BarcodeScanner.StartScanningAsync();
+    }
+    
+    private void OnBarcodeScanned(string barcode)
+    {
+        if (showVerification)
+        {
+            verificationCode = barcode;
+            StateHasChanged();
+        }
+    }
+    
+    private void VerifyLocation()
+    {
+        if (string.IsNullOrWhiteSpace(verificationCode))
+        {
+            verificationError = "Please enter or scan the location code.";
+            return;
+        }
+        
+        if (verificationCode.Trim() != currentLocation.LocationCode)
+        {
+            verificationError = "Location code does not match. Please try again.";
+            return;
+        }
+        
+        // Verification successful
+        showVerification = false;
+        showQuantityInput = true;
+        quantityPicked = currentLocation.QuantityToPick; // Default to full quantity
+        quantityError = "";
+    }
+    
+    private void SkipVerification()
+    {
+        showVerification = false;
+        showQuantityInput = true;
+        quantityPicked = currentLocation.QuantityToPick; // Default to full quantity
+        quantityError = "";
+    }
+    
+    private async Task ConfirmQuantity()
+    {
+        if (quantityPicked < 0 || quantityPicked > currentLocation.QuantityToPick)
+        {
+            quantityError = $"Quantity must be between 0 and {currentLocation.QuantityToPick}.";
+            return;
+        }
+        
+        // Update the location status
+        currentLocation.QuantityPicked = quantityPicked;
+        currentLocation.Status = quantityPicked == currentLocation.QuantityToPick ? "Picked" : 
+            quantityPicked > 0 ? "Partial" : "Pending";
+            
+        // Update the item status and quantity
+        int previousPicked = currentItem.QuantityPicked;
+        currentItem.QuantityPicked = currentItem.PickingLocations.Sum(l => l.QuantityPicked);
+        
+        if (currentItem.QuantityPicked >= currentItem.QuantityRequired)
+        {
+            currentItem.Status = "Picked";
+            pickedItemsCount++;
+        }
+        else if (currentItem.QuantityPicked > 0)
+        {
+            currentItem.Status = "Picking";
+        }
+        
+        // Save the changes locally
+        await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+        
+        // Move to the next location or item
+        if (currentLocation.Status == "Picked")
+        {
+            // Find the next location that is not fully picked
+            currentLocation = currentItem.PickingLocations.FirstOrDefault(l => l.Status != "Picked");
+            
+            if (currentLocation != null)
+            {
+                // Start the verification process for the next location
+                showVerification = true;
+                showQuantityInput = false;
+                verificationCode = "";
+                verificationError = "";
+            }
+            else if (currentItem.Status == "Picked")
+            {
+                // All locations are picked and the item is fully picked
+                // Move to the next item
+                NextItem();
+            }
+            else
+            {
+                // All locations are picked but the item is still short
+                // Show the short item dialog
+                ShowShortItemDialog();
+            }
+        }
+        else
+        {
+            // Stay on the same location for partial picks
+            // but reset the UI state
+            showVerification = true;
+            showQuantityInput = false;
+            verificationCode = "";
+            verificationError = "";
+        }
+        
+        UpdateProgress();
+    }
+    
+    private void ShowShortItemDialog()
+    {
+        showShortDialog = true;
+        shortReason = "";
+        shortReasonOther = "";
+        shortReasonError = "";
+    }
+    
+    private void CloseShortItemDialog()
+    {
+        showShortDialog = false;
+    }
+    
+    private async Task ConfirmShortItem()
+    {
+        if (string.IsNullOrWhiteSpace(shortReason))
+        {
+            shortReasonError = "Please select a reason.";
+            return;
+        }
+        
+        if (shortReason == "Other" && string.IsNullOrWhiteSpace(shortReasonOther))
+        {
+            shortReasonError = "Please specify a reason.";
+            return;
+        }
+        
+        string finalReason = shortReason == "Other" ? shortReasonOther : shortReason;
+        
+        // Update the item status
+        currentItem.Status = "Short";
+        shortItemsCount++;
+        
+        // Save the changes locally
+        await LocalStorage.SetItemAsync($"pickingList_{Id}", pickingList);
+        
+        // Close the dialog
+        CloseShortItemDialog();
+        
+        // Move to the next item
+        NextItem();
+        
+        UpdateProgress();
+    }
+    
+    private void NextItem()
+    {
+        // Find the next item that is not picked or short
+        var nextItem = pickingList.Items
+            .SkipWhile(i => i != currentItem)
+            .Skip(1)
+            .FirstOrDefault(i => i.Status != "Picked" && i.Status != "Short");
+            
+        if (nextItem != null)
+        {
+            currentItemIndex = pickingList.Items.IndexOf(nextItem) + 1// WMS.Web.Mobile/Program.cs (continued)
+                .AddJwtBearer("Bearer", options =>
+                {
+                    options.Authority = builder.Configuration["IdentityUrl"];
+                    options.RequireHttpsMetadata = false;
+                    options.TokenValidationParameters.ValidateAudience = false;
+                });
+                
+            builder.Services.AddAuthorization(options =>
+            {
+                options.AddPolicy("ApiScope", policy =>
+                {
+                    policy.RequireAuthenticatedUser();
+                    policy.RequireClaim("scope", "wms.api");
+                });
+            });
+            
+            // Add Blazored.LocalStorage for offline capabilities
+            builder.Services.AddBlazoredLocalStorage();
+            
+            // Add BarcodeScannerService
+            builder.Services.AddScoped<BarcodeScannerService>();
+            
+            var app = builder.Build();
+
+            // Configure the HTTP request pipeline
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+            else
+            {
+                app.UseExceptionHandler("/Error");
+                app.UseHsts();
+            }
+
+            app.UseHttpsRedirection();
+            app.UseStaticFiles();
+
+            // Register service worker for PWA
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                ServeUnknownFileTypes = true,
+                DefaultContentType = "application/octet-stream"
+            });
+
+            app.UseRouting();
+            app.UseAuthentication();
+            app.UseAuthorization();
+
+            app.MapBlazorHub();
+            app.MapFallbackToPage("/_Host");
+
+            app.Run();
+        }
+    }
+}
