@@ -1,0 +1,203 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ILocalStorageService LocalStorage
+
+<div class="home-page">
+    <div class="welcome-banner">
+        <h2>Welcome, @userName</h2>
+        <p class="last-sync">Last sync: @lastSyncTime</p>
+    </div>
+    
+    <div class="quick-actions">
+        <div class="action-heading">Quick Actions</div>
+        <div class="action-grid">
+            <div class="action-card" @onclick="() => NavigationManager.NavigateTo('/picking/assigned')">
+                <div class="action-icon">
+                    <span class="oi oi-list"></span>
+                </div>
+                <div class="action-text">My Picks</div>
+                @if (assignedPicksCount > 0)
+                {
+                    <div class="action-badge">@assignedPicksCount</div>
+                }
+            </div>
+            
+            <div class="action-card" @onclick="() => NavigationManager.NavigateTo('/receiving/pending')">
+                <div class="action-icon">
+                    <span class="oi oi-inbox"></span>
+                </div>
+                <div class="action-text">Open Receipts</div>
+                @if (openReceiptsCount > 0)
+                {
+                    <div class="action-badge">@openReceiptsCount</div>
+                }
+            </div>
+            
+            <div class="action-card" @onclick="() => NavigationManager.NavigateTo('/inventory/lookup')">
+                <div class="action-icon">
+                    <span class="oi oi-magnifying-glass"></span>
+                </div>
+                <div class="action-text">Item Lookup</div>
+            </div>
+            
+            <div class="action-card" @onclick="() => NavigationManager.NavigateTo('/inventory/count')">
+                <div class="action-icon">
+                    <span class="oi oi-calculator"></span>
+                </div>
+                <div class="action-text">Cycle Count</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="task-list">
+        <div class="task-heading">Recent Tasks</div>
+        @if (recentTasks.Any())
+        {
+            <div class="task-items">
+                @foreach (var task in recentTasks)
+                {
+                    <div class="task-item" @onclick="() => NavigateToTask(task)">
+                        <div class="task-icon">
+                            <span class="oi @task.Icon"></span>
+                        </div>
+                        <div class="task-details">
+                            <div class="task-title">@task.Title</div>
+                            <div class="task-subtitle">@task.Subtitle</div>
+                        </div>
+                        <div class="task-time">@task.TimeAgo</div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="no-tasks">
+                <p>No recent tasks found.</p>
+            </div>
+        }
+    </div>
+    
+    <div class="sync-button" @onclick="SyncData">
+        <span class="oi oi-loop-circular"></span>
+        <span>Sync Data</span>
+    </div>
+</div>
+
+@code {
+    private string userName = "Warehouse Operator";
+    private string lastSyncTime = "Never";
+    private int assignedPicksCount = 0;
+    private int openReceiptsCount = 0;
+    private List<TaskItem> recentTasks = new List<TaskItem>();
+    
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        
+        if (user.Identity.IsAuthenticated)
+        {
+            userName = user.Identity.Name;
+        }
+        
+        // Load data from localStorage (for offline support)
+        var savedLastSync = await LocalStorage.GetItemAsync<string>("lastSyncTime");
+        if (!string.IsNullOrEmpty(savedLastSync))
+        {
+            lastSyncTime = savedLastSync;
+        }
+        
+        await LoadDashboardData();
+    }
+    
+    private async Task LoadDashboardData()
+    {
+        try
+        {
+            // In a real app, we would load data from APIs
+            // For demo purposes, we'll use mock data
+            
+            // Load assigned picks count
+            assignedPicksCount = await LocalStorage.GetItemAsync<int>("assignedPicksCount");
+            
+            // Load open receipts count
+            openReceiptsCount = await LocalStorage.GetItemAsync<int>("openReceiptsCount");
+            
+            // Load recent tasks
+            var savedTasks = await LocalStorage.GetItemAsync<List<TaskItem>>("recentTasks");
+            if (savedTasks != null && savedTasks.Any())
+            {
+                recentTasks = savedTasks;
+            }
+            else
+            {
+                // Create sample tasks if none exist
+                recentTasks = new List<TaskItem>
+                {
+                    new TaskItem 
+                    { 
+                        Id = "pick-123", 
+                        Type = "picking", 
+                        Title = "Pick Order #1001", 
+                        Subtitle = "10 items - Zone A", 
+                        Icon = "oi-list", 
+                        TimeAgo = "2 hours ago" 
+                    },
+                    new TaskItem 
+                    { 
+                        Id = "receive-456", 
+                        Type = "receiving", 
+                        Title = "Receive PO #2002", 
+                        Subtitle = "5 items from Supplier XYZ", 
+                        Icon = "oi-inbox", 
+                        TimeAgo = "Yesterday" 
+                    },
+                    new TaskItem 
+                    { 
+                        Id = "count-789", 
+                        Type = "inventory", 
+                        Title = "Cycle Count", 
+                        Subtitle = "Zone B - Completed", 
+                        Icon = "oi-calculator", 
+                        TimeAgo = "2 days ago" 
+                    }
+                };
+                
+                await LocalStorage.SetItemAsync("recentTasks", recentTasks);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error loading dashboard data: {ex.Message}");
+        }
+    }
+    
+    private void NavigateToTask(TaskItem task)
+    {
+        NavigationManager.NavigateTo($"/{task.Type}/{task.Id}");
+    }
+    
+    private async Task SyncData()
+    {
+        // In a real app, we would sync data with the server
+        // For demo purposes, we'll just update the last sync time
+        
+        lastSyncTime = DateTime.Now.ToString("g");
+        await LocalStorage.SetItemAsync("lastSyncTime", lastSyncTime);
+        
+        // Reload dashboard data
+        await LoadDashboardData();
+    }
+    
+    private class TaskItem
+    {
+        public string Id { get; set; }
+        public string Type { get; set; }
+        public string Title { get; set; }
+        public string Subtitle { get; set; }
+        public string Icon { get; set; }
+        public string TimeAgo { get; set; }
+    }
+}

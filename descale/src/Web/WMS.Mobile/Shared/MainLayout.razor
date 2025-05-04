@@ -1,0 +1,136 @@
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.JSInterop
+@inherits LayoutComponentBase
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JSRuntime
+@inject ILocalStorageService LocalStorage
+
+<div class="mobile-container">
+    <header class="app-header">
+        <div class="header-left">
+            @if (showBackButton)
+            {
+                <button class="back-button" @onclick="GoBack">
+                    <span class="oi oi-arrow-left"></span>
+                </button>
+            }
+        </div>
+        <div class="header-title">
+            <h1>@Title</h1>
+        </div>
+        <div class="header-right">
+            @if (IsOnline)
+            {
+                <span class="online-status online" title="Online">
+                    <span class="oi oi-wifi"></span>
+                </span>
+            }
+            else
+            {
+                <span class="online-status offline" title="Offline">
+                    <span class="oi oi-wifi"></span>
+                </span>
+            }
+        </div>
+    </header>
+    
+    <main class="app-content">
+        @Body
+    </main>
+    
+    <nav class="app-nav">
+        <div class="nav-item @(currentRoute == "" ? "active" : "")" @onclick="() => NavigateTo("")">
+            <span class="oi oi-home"></span>
+            <span class="nav-text">Home</span>
+        </div>
+        <div class="nav-item @(currentRoute.StartsWith("picking") ? "active" : "")" @onclick="() => NavigateTo("picking")">
+            <span class="oi oi-list"></span>
+            <span class="nav-text">Picking</span>
+        </div>
+        <div class="nav-item @(currentRoute.StartsWith("receiving") ? "active" : "")" @onclick="() => NavigateTo("receiving")">
+            <span class="oi oi-inbox"></span>
+            <span class="nav-text">Receiving</span>
+        </div>
+        <div class="nav-item @(currentRoute.StartsWith("inventory") ? "active" : "")" @onclick="() => NavigateTo("inventory")">
+            <span class="oi oi-box"></span>
+            <span class="nav-text">Inventory</span>
+        </div>
+    </nav>
+</div>
+
+@code {
+    private string currentRoute = "";
+    private bool showBackButton = false;
+    private bool IsOnline = true;
+    private DotNetObjectReference<MainLayout> objRef;
+    
+    [Parameter]
+    public string Title { get; set; } = "WMS Mobile";
+    
+    protected override async Task OnInitializedAsync()
+    {
+        NavigationManager.LocationChanged += OnLocationChanged;
+        ProcessUrl(NavigationManager.Uri);
+        
+        objRef = DotNetObjectReference.Create(this);
+        await JSRuntime.InvokeVoidAsync("networkStatusInterop.initialize", objRef);
+    }
+    
+    private void OnLocationChanged(object sender, LocationChangedEventArgs e)
+    {
+        ProcessUrl(e.Location);
+        StateHasChanged();
+    }
+    
+    private void ProcessUrl(string url)
+    {
+        var uri = new Uri(url);
+        var path = uri.AbsolutePath;
+        
+        if (path == "/")
+        {
+            currentRoute = "";
+            showBackButton = false;
+            Title = "WMS Mobile";
+        }
+        else
+        {
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length > 0)
+            {
+                currentRoute = segments[0];
+                showBackButton = true;
+                
+                Title = currentRoute.FirstCharToUpper();
+                
+                if (segments.Length > 1)
+                {
+                    Title += " - " + segments[1].FirstCharToUpper();
+                }
+            }
+        }
+    }
+    
+    private void NavigateTo(string route)
+    {
+        NavigationManager.NavigateTo("/" + route);
+    }
+    
+    private void GoBack()
+    {
+        JSRuntime.InvokeVoidAsync("history.back");
+    }
+    
+    [JSInvokable]
+    public void UpdateNetworkStatus(bool isOnline)
+    {
+        IsOnline = isOnline;
+        StateHasChanged();
+    }
+    
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+        objRef?.Dispose();
+    }
+}
